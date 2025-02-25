@@ -1,82 +1,94 @@
+import os
+import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-import time
 
-def get_full_page_htmls(url, class_name):
-    """Extracts HTML content from all pages linked by elements with a specific class."""
+def setup_driver():
+    """Sets up a headless Chrome WebDriver."""
     options = Options()
-    options.add_argument("--headless")  # Run in headless mode (no UI)
+    options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
+    return driver
+
+def get_links(driver, url):
+    """Extracts file and directory links from the given page."""
+    driver.get(url)
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "Link--primary")))
+
+    elements = driver.find_elements(By.CLASS_NAME, "Link--primary")
+
+    file_links = []
+    directory_links = []
+
+    for element in elements:
+        aria_label = element.get_attribute("aria-label")
+        href = element.get_attribute("href")
+
+        if aria_label and href:
+            if "(File)" in aria_label:
+                file_links.append(href)
+            elif "(Directory)" in aria_label and "node_modules" not in href:
+                directory_links.append(href)
+
+    return file_links, directory_links
+
+def extract_html(driver, file_link):
+    """Extracts and returns the HTML content of a file page."""
+    driver.get(file_link)
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+    return driver.page_source
+
+def scrape_repository(url, output_file):
+    """Recursively scrapes all files from a repository, ignoring 'node_modules'."""
+    driver = setup_driver()
+    visited_urls = set()  # Tracks visited directories
+    visited_files = set()  # Tracks visited files (fix for duplicates)
 
     try:
-        driver.get(url)  # Open the main page
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, class_name)))
+        def process_directory(directory_url):
+            """Processes a directory by extracting its files and recursively visiting subdirectories."""
+            if directory_url in visited_urls or "node_modules" in directory_url:
+                return  # Skip if already visited or is 'node_modules'
+            visited_urls.add(directory_url)
 
-        # Find all elements with the specified class name
-        elements = driver.find_elements(By.CLASS_NAME, class_name)
+            print(f"Processing directory: {directory_url}")
 
-        # Define words to exclude
-        exclude_texts = {"Releases", "Packages", "Contributors"}
+            file_links, directory_links = get_links(driver, directory_url)
 
-        # Extract links and texts, filtering out excluded elements
-        links = [
-            el for el in elements 
-            if el.text.strip() and el.text.strip() not in exclude_texts
-        ]
+            # Extract and append file HTML
+            with open(output_file, "a", encoding="utf-8") as file:
+                for file_link in file_links:
+                    if file_link in visited_files:
+                        continue  # Skip if the file was already processed
+                    visited_files.add(file_link)  # Mark file as processed
 
-        extracted_htmls = []
+                    print(f"Extracting file: {file_link}")
+                    file_html = extract_html(driver, file_link)
+                    file.write(file_html + "\n\n")  
 
-        for link in links:
-            try:
-                # Scroll into view before clicking
-                driver.execute_script("arguments[0].scrollIntoView();", link)
-                time.sleep(1)
+            # Recursively process directories
+            for sub_directory in directory_links:
+                process_directory(sub_directory)
 
-                # Open link in a new tab
-                action = ActionChains(driver)
-                action.key_down(Keys.CONTROL).click(link).key_up(Keys.CONTROL).perform()
-                time.sleep(5)  # Increase wait time to allow full loading
+        # Start processing from the root URL
+        process_directory(url)
 
-                # Switch to the new tab
-                driver.switch_to.window(driver.window_handles[-1])
-
-                # Wait until the page fully loads
-                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-
-                # Extract full HTML of the page
-                page_html = driver.page_source
-                extracted_htmls.append(page_html)
-
-                # Close the tab and return to the main page
-                driver.close()
-                driver.switch_to.window(driver.window_handles[0])
-
-            except Exception as e:
-                print(f"Error processing link {link.text}: {e}")
-
-        return extracted_htmls
+        print(f"Extraction complete. Data saved to {output_file}")
 
     finally:
         driver.quit()
 
 # Example usage
-url = input("Enter the URL: ")
-class_name = "Link--primary"
-html_pages = get_full_page_htmls(url, class_name)
-
-# Print the extracted HTML for each page
-for i, html in enumerate(html_pages, 1):
-    print(f"\n=== Page {i} HTML ===\n")
-    print(html[:1000])  # Print first 1000 characters for preview
+repo_url = input("Enter the repository URL: ")
+output_filename = "extracted_repo_html.html"
+scrape_repository(repo_url, output_filename)
