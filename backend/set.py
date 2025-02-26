@@ -151,6 +151,20 @@ def scrape_and_generate_readme(repo_url: str = Query(..., title="Repository URL"
     readme_content = create_readme(json_output)
     return {"readme": readme_content}
 
+@app.post("/change")
+def make_change(content: str = Query(..., title="Content", description="The content to be changed."), question: str = Query(..., title="Question", description="The question to be asked.")):
+    client = OpenAI(api_key="ollama", base_url="http://localhost:11434/v1")
+    prompt = f"""Given the following content: {content} make changes to the README.md code keeping in mind the following: {question}, and generate a new Readme file code. ONLY TAKE INFORMATION FROM THE GIVEN CONTENT AND QUESTION DO NOT MAKE UP YOUR OWN!"""
+    response = client.chat.completions.create(
+        model="llama3.2",
+        messages=[
+            {"role": "system", "content": "You are a specialized assistant that generates high-quality GitHub README.md files. When given repository information, you will create a professional, well-structured README that follows best practices and highlights the repository's features. ONLY TAKE INFORMATION FROM THE GIVEN CONTENT AND DO NOT MAKE UP YOUR OWN!"},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    
+    return response.choices[0].message.content
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
